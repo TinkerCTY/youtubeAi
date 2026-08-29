@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "youtube-ai",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "../web/dist"
+  },
+  "r2_buckets": [
+    { "binding": "SESSION_BUCKET", "bucket_name": "youtube-ai-sessions" }
+  ],
+  "observability": { "enabled": true }
+}

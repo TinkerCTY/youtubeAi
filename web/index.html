@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YouTube AI 对话文章生成器</title>
+    <style>
+      :root {
+        --bg: #f8f9fa;
+        --card: #fff;
+        --border: #e0e0e0;
+        --text: #1a1a1a;
+        --muted: #666;
+        --accent: #2563eb;
+        --error: #dc2626;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.7;
+      }
+      .container {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 4rem;
+      }
+      h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+      .hint { color: var(--muted); font-size: .9rem; margin-top: 0; }
+
+      .gen-form {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1.25rem;
+        margin: 1.5rem 0;
+      }
+      .field { display: block; margin-bottom: .75rem; }
+      .field span {
+        display: block;
+        font-size: .8rem;
+        color: var(--muted);
+        margin-bottom: .25rem;
+      }
+      .field input, .field textarea {
+        width: 100%;
+        padding: .5rem .65rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: .95rem;
+      }
+      .advanced { margin-top: .75rem; }
+      .advanced summary { cursor: pointer; font-size: .85rem; color: var(--muted); }
+      .advanced[open] { padding-top: .5rem; }
+
+      button[type="submit"] {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: .6rem 1.5rem;
+        font-size: .95rem;
+        cursor: pointer;
+        width: 100%;
+      }
+      button[type="submit"]:disabled { opacity: .5; cursor: wait; }
+
+      .article { margin-top: 1.5rem; }
+      .chapter {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1rem;
+      }
+      .chapter-title {
+        font-size: 1.15rem;
+        margin: 0 0 .75rem;
+        padding-bottom: .5rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .chapter-body { white-space: pre-wrap; word-break: break-word; }
+      .error-msg {
+        color: var(--error);
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        padding: .75rem 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>YouTube AI 对话文章生成器</h1>
+      <p class="hint">输入一个有字幕的 YouTube 视频链接，AI 将基于字幕生成一篇中文对话内容文章。</p>
+
+      <form id="gen-form" class="gen-form">
+        <label class="field">
+          <span>YouTube 视频链接</span>
+          <input
+            id="video-url"
+            name="videoUrl"
+            type="url"
+            placeholder="https://www.youtube.com/watch?v=..."
+            required
+          />
+        </label>
+
+        <details class="advanced">
+          <summary>生成要求（可选）</summary>
+          <label class="field">
+            <span>任务类型</span>
+            <input name="taskType" placeholder="如：总结 / 改写为对话" />
+          </label>
+          <label class="field">
+            <span>输出风格</span>
+            <input name="style" placeholder="如：口语化 / 专业" />
+          </label>
+          <label class="field">
+            <span>目标受众</span>
+            <input name="audience" placeholder="如：普通读者 / 行业人" />
+          </label>
+          <label class="field">
+            <span>约束条件</span>
+            <input name="constraints" placeholder="如：不超过 1500 字" />
+          </label>
+        </details>
+
+        <button type="submit" id="gen-btn">生成对话文章</button>
+      </form>
+
+      <section id="article" class="article" aria-live="polite"></section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

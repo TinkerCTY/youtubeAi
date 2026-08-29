@@ -1,0 +1,6 @@
+{
+  "name": "shared",
+  "private": true,
+  "main": "./types.ts",
+  "types": "./types.ts"
+}

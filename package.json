@@ -1,0 +1,10 @@
+{
+  "name": "youtube-ai",
+  "private": true,
+  "workspaces": ["web", "worker", "shared"],
+  "scripts": {
+    "build": "npm run build --workspace web",
+    "test": "npm test --workspace worker",
+    "deploy": "npm run deploy --workspace worker"
+  }
+}
