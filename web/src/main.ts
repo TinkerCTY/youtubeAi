@@ -1,5 +1,5 @@
 import type { GenReqs } from 'shared';
-import { postGenerate } from './api';
+import { postGenerate, postSummary } from './api';
 import { consumeSse } from './sse-client';
 import { ArticleRenderer } from './render';
 
@@ -33,6 +33,11 @@ if (form && article && btn) {
       await consumeSse(stream, {
         onChapter: (id, title) => renderer.startChapter(id, title),
         onText: (text) => renderer.appendText(text),
+        onManifest: (sessionId, _chapters) => {
+          renderer.setSessionId(sessionId);
+          // 前端只发 {sessionId, chapterId}，不回传整篇文章
+          renderer.setSummarizer(async (chapterId) => postSummary(sessionId, chapterId));
+        },
         onError: (msg) => renderer.showError(msg),
       });
     } catch (err) {
