@@ -2,26 +2,52 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   workflow_dispatch:
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
 
-      - uses: actions/setup-node@v4
+jobs:
+  test-and-deploy:
+    name: Test + Build + Deploy (Cloudflare Worker + Assets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      - run: npm ci
+      - name: Install Dependencies (workspaces)
+        run: npm ci || npm install
 
-      - name: Build frontend
-        run: npm run build
+      - name: Type check Worker
+        run: npm exec --workspace worker -- tsc --noEmit
 
-      - name: Deploy Worker
-        run: npm run deploy
+      - name: Run Worker Tests (68 TDD cases)
+        run: npm test --workspace worker
+
+      - name: Build Frontend (Vite → web/dist)
+        run: npm run build --workspace web
+
+      - name: Type check Web
+        run: npm exec --workspace web -- tsc --noEmit
+
+      - name: Deploy to Cloudflare Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          wranglerVersion: '3'
+          # 把 GEMINI_API_KEY 注入为 Worker Secret（部署前由 Wrangler 写入）
+          secrets: |
+            GEMINI_API_KEY
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
