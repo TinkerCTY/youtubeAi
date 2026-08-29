@@ -25,10 +25,12 @@ describe('build5W1HPrompt', () => {
     expect(p).not.toContain('【生成要求】');
   });
 
-  it('有 genReqs 时追加【生成要求】', () => {
+  it('有 genReqs 时追加【生成要求】段（含硬性约束标识/值）', () => {
     const p = build5W1HPrompt(subtitle, chapterTitle, chapterText, { audience: '普通读者' });
-    expect(p).toContain('【生成要求】');
+    // 兼容前缀：新版文案为「【生成要求（硬性约束）】」
+    expect(p).toMatch(/【生成要求/);
     expect(p).toContain('普通读者');
+    expect(p).toMatch(/必须(严格)?遵守|不得违反|约束范围内/);
   });
 
   it('含约束：每项各 1 句，忠实内容，不编造', () => {

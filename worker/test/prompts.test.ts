@@ -23,7 +23,8 @@ describe('buildArticlePrompt', () => {
     expect(p).toContain('输出风格：口语化');
     expect(p).toContain('目标受众：普通读者');
     expect(p).toContain('约束条件：800字内');
-    expect(p).toContain('不超出其范围');
+    // 新版「硬性约束」话术：必须有"必须严格遵守/不得违反/在...约束范围内"任一不越界语义
+    expect(p).toMatch(/必须(严格)?遵守|不得违反|约束范围内/);
   });
 
   it('部分 genReqs 只出现已填项', () => {

@@ -1,7 +1,9 @@
 import type { GenReqs } from 'shared';
 
 export const ARTICLE_SYSTEM =
-  '你是一名资深中文编辑，擅长把视频字幕改写为生动、可读性强的中文对话体文章。';
+  '你是一名资深中文编辑，擅长把视频字幕改写为生动、可读性强的中文对话体文章。\n' +
+  '【关于生成要求】你必须严格遵守用户随请求提供的所有生成要求（包括任务类型、输出风格、目标受众、约束条件等维度），不得超出其要求范围，否则视为不合格输出。\n' +
+  '当生成要求与"忠实于字幕内容"冲突时，以忠实字幕为先，并在输出中通过更贴近生成要求的表达方式来兼顾。';
 
 export const SUMMARY_SYSTEM =
   '你是一名专业中文总结编辑。请忠实于给定的视频字幕上下文和章节内容，不编造任何未提及的信息。';
@@ -69,10 +71,15 @@ export function build5W1HPrompt(
 
 function appendGenReqs(base: string, genReqs: GenReqs): string {
   const items: string[] = [];
-  if (genReqs.taskType) items.push(`任务类型：${genReqs.taskType}`);
-  if (genReqs.style) items.push(`输出风格：${genReqs.style}`);
-  if (genReqs.audience) items.push(`目标受众：${genReqs.audience}`);
-  if (genReqs.constraints) items.push(`约束条件：${genReqs.constraints}`);
+  if (genReqs.taskType) items.push(`- 任务类型：${genReqs.taskType}`);
+  if (genReqs.style) items.push(`- 输出风格：${genReqs.style}`);
+  if (genReqs.audience) items.push(`- 目标受众：${genReqs.audience}`);
+  if (genReqs.constraints) items.push(`- 约束条件：${genReqs.constraints}`);
   if (!items.length) return base;
-  return `${base}\n\n【生成要求】\n请在以下范围内影响输出，不超出其范围：\n${items.join('\n')}`;
+  return (
+    `${base}\n\n【生成要求（硬性约束）】\n` +
+    `以下要求是硬性约束，必须严格遵守，不得违反：\n` +
+    `${items.join('\n')}\n` +
+    `说明：输出的措辞、结构、语域、篇幅、视角、禁用词等都必须在上述约束范围内；若与事实忠实性冲突，事实优先但措辞仍尽量贴近约束。`
+  );
 }
