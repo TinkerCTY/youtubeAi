@@ -14,7 +14,7 @@ generateRoutes.post('/api/generate', async (c) => {
   const videoId = parseVideoId(body.videoUrl ?? '');
   if (!videoId) return c.json({ error: 'invalid video url' }, 400);
 
-  const sub = resolveSubtitle(videoId);
+  const sub = await resolveSubtitle(videoId);
   if (!sub) return c.json({ error: 'subtitle not available for this video' }, 404);
 
   const prompt = buildArticlePrompt(sub.text, body.genReqs);
