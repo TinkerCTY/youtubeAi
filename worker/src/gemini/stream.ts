@@ -1,13 +1,13 @@
 /**
  * Gemini streamGenerateContent + SSE 解析
  *
- * 端点：POST .../gemini-2.5-flash:streamGenerateContent?alt=sse
+ * 端点：POST .../gemini-3.6-flash:streamGenerateContent?alt=sse
  * 认证：x-goog-api-key 头
  * SSE 事件 data 行含 JSON：candidates[0].content.parts[].text
  */
 
 const STREAM_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse';
 
 export interface StreamOptions {
   apiKey: string;
