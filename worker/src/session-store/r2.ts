@@ -2,7 +2,7 @@ import type { SessionContext } from 'shared';
 
 const TTL_SECONDS = 86_400; // 24h
 const KEY_PREFIX = 'sessions/';
-const SUBTTL = 604_800; // 7 天
+const SUBTTL = 7_776_000; // 90 天
 const SUB_PREFIX = 'subtitles/';
 
 /** 写入会话上下文到 R2，设 24h TTL */

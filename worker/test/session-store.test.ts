@@ -98,15 +98,14 @@ describe('subtitle cache (r2)', () => {
     expect(bucket.lastPut!.key).toBe('subtitles/vid002.json');
   });
 
-  it('putSubtitleCache 设 TTL 7 天', async () => {
+  it('putSubtitleCache 设 TTL 90 天', async () => {
     const bucket = mockBucket();
     const before = Date.now();
     await putSubtitleCache(bucket, 'vid003', '字幕');
     const expires = bucket.lastPut!.meta?.cacheExpiry;
     expect(expires).toBeInstanceOf(Date);
     const expiryMs = (expires as Date).getTime();
-    const weekMs = 604_800_000;
-    expect(expiryMs).toBeGreaterThan(before + 6 * 86_400_000);
-    expect(expiryMs).toBeLessThan(before + 8 * 86_400_000);
+    expect(expiryMs).toBeGreaterThan(before + 89 * 86_400_000);
+    expect(expiryMs).toBeLessThan(before + 91 * 86_400_000);
   });
 });
