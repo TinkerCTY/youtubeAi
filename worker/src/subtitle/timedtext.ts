@@ -11,12 +11,20 @@ export interface FetchTimedTextOptions {
   timeoutMs?: number;
 }
 
-const DEFAULT_LANGS = ['zh-Hans', 'zh-CN', 'en'] as const;
+const DEFAULT_LANGS = ['zh-Hans', 'zh-CN', 'zh', 'zh-Hant', 'en'] as const;
+
+const FETCH_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+};
 
 /**
  * 拉取 YouTube timedtext（json3 格式）→ 拼接成纯文本
  * 最佳努力 best-effort：网络 4xx/5xx / 验证码 / 解析失败 / 内容为空 都会抛错，
  * 由 resolver 层降级到硬编码字幕。
+ *
+ * 策略：每种语言先试手动字幕，再试自动字幕（kind=asr），最后试不指定语言（让 YouTube 返回默认）。
  */
 export async function fetchTimedText(
   videoId: string,
@@ -26,25 +34,44 @@ export async function fetchTimedText(
   const fetcher: Fetcher = opts.fetcher ?? fetch;
   const errors: string[] = [];
 
+  // 1) 逐语言尝试：手动字幕 → 自动字幕（kind=asr）
   for (const lang of languages) {
-    const url = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
-      videoId,
-    )}&lang=${encodeURIComponent(lang)}&fmt=json3`;
-    try {
-      const res = await fetcher(url);
-      if (!res.ok) {
-        errors.push(`${lang}: HTTP ${res.status}`);
-        continue;
+    for (const kind of ['', '&kind=asr']) {
+      const url = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
+        videoId,
+      )}&lang=${encodeURIComponent(lang)}&fmt=json3${kind}`;
+      try {
+        const res = await fetcher(url, { headers: FETCH_HEADERS });
+        if (!res.ok) {
+          errors.push(`${lang}${kind}: HTTP ${res.status}`);
+          continue;
+        }
+        const text = await res.text();
+        const extracted = extractTextFromJson3(text);
+        if (extracted) {
+          return { videoId, source: 'live', text: extracted };
+        }
+        errors.push(`${lang}${kind}: empty`);
+      } catch (e) {
+        errors.push(`${lang}${kind}: ${(e as Error).message}`);
       }
+    }
+  }
+
+  // 2) 最后尝试：不指定语言，让 YouTube 返回默认字幕
+  const defaultUrl = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
+    videoId,
+  )}&fmt=json3`;
+  try {
+    const res = await fetcher(defaultUrl, { headers: FETCH_HEADERS });
+    if (res.ok) {
       const text = await res.text();
       const extracted = extractTextFromJson3(text);
-      if (extracted) {
-        return { videoId, source: 'live', text: extracted };
-      }
-      errors.push(`${lang}: empty`);
-    } catch (e) {
-      errors.push(`${lang}: ${(e as Error).message}`);
+      if (extracted) return { videoId, source: 'live', text: extracted };
     }
+    errors.push(`default: HTTP ${res.status}`);
+  } catch (e) {
+    errors.push(`default: ${(e as Error).message}`);
   }
 
   throw new Error(`fetchTimedText(${videoId}) failed: ${errors.join(' | ')}`);

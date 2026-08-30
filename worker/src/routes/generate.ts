@@ -15,7 +15,14 @@ generateRoutes.post('/api/generate', async (c) => {
   if (!videoId) return c.json({ error: 'invalid video url' }, 400);
 
   const sub = await resolveSubtitle(videoId);
-  if (!sub) return c.json({ error: 'subtitle not available for this video' }, 404);
+  if (!sub)
+    return c.json(
+      {
+        error:
+          '该视频无可用字幕（实时抓取失败且非演示视频）。建议使用演示视频：https://www.youtube.com/watch?v=xRh2sVcNXQ8',
+      },
+      404,
+    );
 
   const prompt = buildArticlePrompt(sub.text, body.genReqs);
   const sessionId = crypto.randomUUID();
