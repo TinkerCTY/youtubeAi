@@ -26,7 +26,7 @@ export async function* geminiStream(opts: StreamOptions): AsyncGenerator<string>
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
       ...(opts.system ? { systemInstruction: { parts: [{ text: opts.system }] } } : {}),
-      generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: {},
     }),
   });
 

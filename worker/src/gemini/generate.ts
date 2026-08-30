@@ -25,7 +25,7 @@ export async function geminiGenerate(opts: GenerateOptions): Promise<string> {
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
       ...(opts.system ? { systemInstruction: { parts: [{ text: opts.system }] } } : {}),
-      generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: {},
     }),
   });
 

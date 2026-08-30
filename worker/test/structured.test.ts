@@ -67,7 +67,7 @@ describe('geminiStructured', () => {
     expect(calls[0].headers.get('x-goog-api-key')).toBe('k');
     expect(calls[0].body.generationConfig.responseMimeType).toBe('application/json');
     expect(calls[0].body.generationConfig.responseSchema).toEqual(SCHEMA);
-    expect(calls[0].body.generationConfig.thinkingConfig.thinkingBudget).toBe(0);
+    // thinkingConfig removed for gemini-3.6-flash compatibility
   });
 
   it('带 system 时附 systemInstruction', async () => {

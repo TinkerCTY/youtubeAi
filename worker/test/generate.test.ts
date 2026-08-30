@@ -27,7 +27,7 @@ describe('geminiGenerate', () => {
     expect(calls[0].url).toContain(':generateContent');
     expect(calls[0].headers.get('x-goog-api-key')).toBe('k');
     expect(calls[0].body.contents[0].parts[0].text).toBe('p');
-    expect(calls[0].body.generationConfig.thinkingConfig.thinkingBudget).toBe(0);
+    // thinkingConfig removed for gemini-3.6-flash compatibility
   });
 
   it('含 system 时附 systemInstruction', async () => {

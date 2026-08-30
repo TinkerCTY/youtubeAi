@@ -72,17 +72,14 @@ describe('geminiStream', () => {
     expect(url).toContain('alt=sse');
   });
 
-  it('鉴权头 x-goog-api-key + thinkingBudget=0', async () => {
+  it('鉴权头 x-goog-api-key', async () => {
     let headers: Headers;
-    let body: any;
     const fetcher = vi.fn(async (_url: any, init: any) => {
       headers = new Headers(init.headers);
-      body = JSON.parse(String(init.body));
       return mockSseResponse([sseData('x')]);
     });
     for await (const _ of geminiStream({ apiKey: 'mykey', prompt: 'p', fetcher })) { /* drain */ }
     expect(headers!.get('x-goog-api-key')).toBe('mykey');
-    expect(body.generationConfig.thinkingConfig.thinkingBudget).toBe(0);
   });
 
   it('上游失败抛错含状态码', async () => {

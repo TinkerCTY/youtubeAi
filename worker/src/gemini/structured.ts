@@ -28,7 +28,6 @@ export async function geminiStructured<T = any>(opts: StructuredOptions<T>): Pro
       contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
       ...(opts.system ? { systemInstruction: { parts: [{ text: opts.system }] } } : {}),
       generationConfig: {
-        thinkingConfig: { thinkingBudget: 0 },
         responseMimeType: 'application/json',
         responseSchema: opts.schema,
       },
