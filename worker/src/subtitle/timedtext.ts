@@ -7,8 +7,8 @@ export interface FetchTimedTextOptions {
   fetcher?: Fetcher;
   /** 按顺序尝试的语言，默认 zh-Hans → zh-CN → en */
   languages?: readonly string[];
-  /** 单语言请求超时 ms（默认 4s，Cloudflare Worker SLA 容忍即可） */
-  timeoutMs?: number;
+  /** 可选：代理转发 URL 前缀（直连失败后降级，如 https://corsproxy.io/?url= ） */
+  proxyUrl?: string;
 }
 
 const DEFAULT_LANGS = ['zh-Hans', 'zh-CN', 'zh', 'zh-Hant', 'en'] as const;
@@ -22,10 +22,11 @@ const FETCH_HEADERS: Record<string, string> = {
 /**
  * 拉取 YouTube timedtext（json3 格式）→ 拼接成纯文本
  * 最佳努力 best-effort：网络 4xx/5xx / 验证码 / 解析失败 / 内容为空 都会抛错，
- * 由 resolver 层降级到硬编码字幕。
+ * 由 resolver 层降级到硬编码字幕或 R2 缓存。
  *
  * 策略：所有候选 URL（语言×手动/asr + 默认）并行发起，
  * 按优先级顺序检查结果，返回第一个命中。
+ * 如果直连全部失败，且有 proxyUrl 配置，则通过代理转发重试一次。
  */
 export async function fetchTimedText(
   videoId: string,
@@ -35,29 +36,52 @@ export async function fetchTimedText(
   const fetcher: Fetcher = opts.fetcher ?? fetch;
   const errors: string[] = [];
 
-  // 1) 构建所有候选 URL（按优先级排序）
-  const candidates: { url: string; label: string }[] = [];
+  const result = await tryFetchCandidates(videoId, languages, fetcher, errors, '');
+  if (result) return result;
+
+  // 代理降级：直连全部失败，且配置了代理 URL
+  if (opts.proxyUrl) {
+    const proxyResult = await tryFetchCandidates(
+      videoId,
+      languages,
+      fetcher,
+      errors,
+      opts.proxyUrl,
+    );
+    if (proxyResult) return { ...proxyResult, source: 'proxy' as const };
+  }
+
+  throw new Error(`fetchTimedText(${videoId}) failed: ${errors.join(' | ')}`);
+}
+
+/** 构建候选 URL 并并行 fetch，返回第一个成功结果 */
+async function tryFetchCandidates(
+  videoId: string,
+  languages: readonly string[],
+  fetcher: Fetcher,
+  errors: string[],
+  proxyUrl: string,
+): Promise<ResolvedSubtitle | null> {
+  // 构建所有候选 URL（按优先级排序）
+  const candidates: { target: string; label: string }[] = [];
   for (const lang of languages) {
-    candidates.push({
-      url: `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(lang)}&fmt=json3`,
-      label: lang,
-    });
-    candidates.push({
-      url: `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(lang)}&fmt=json3&kind=asr`,
-      label: `${lang}(asr)`,
-    });
+    const base = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(lang)}&fmt=json3`;
+    candidates.push({ target: base, label: `${proxyUrl ? 'proxy/' : ''}${lang}` });
+    candidates.push({ target: `${base}&kind=asr`, label: `${proxyUrl ? 'proxy/' : ''}${lang}(asr)` });
   }
   candidates.push({
-    url: `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(videoId)}&fmt=json3`,
-    label: 'default',
+    target: `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(videoId)}&fmt=json3`,
+    label: `${proxyUrl ? 'proxy/' : ''}default`,
   });
 
-  // 2) 全部并行发起（总耗时 = 最慢单请求，而非累加）
+  // 通过代理 URL 前缀或直连发起请求
+  const buildUrl = (target: string) =>
+    proxyUrl ? `${proxyUrl}${encodeURIComponent(target)}` : target;
+
   const results = await Promise.allSettled(
-    candidates.map((c) => fetcher(c.url, { headers: FETCH_HEADERS })),
+    candidates.map((c) => fetcher(buildUrl(c.target), { headers: FETCH_HEADERS })),
   );
 
-  // 3) 按优先级顺序检查结果，返回第一个命中
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     const label = candidates[i].label;
@@ -73,16 +97,14 @@ export async function fetchTimedText(
     try {
       const text = await res.text();
       const extracted = extractTextFromJson3(text);
-      if (extracted) {
-        return { videoId, source: 'live', text: extracted };
-      }
+      if (extracted) return { videoId, source: proxyUrl ? 'proxy' : 'live', text: extracted };
       errors.push(`${label}: empty`);
     } catch (e) {
       errors.push(`${label}: ${(e as Error).message}`);
     }
   }
 
-  throw new Error(`fetchTimedText(${videoId}) failed: ${errors.join(' | ')}`);
+  return null;
 }
 
 /* ───────────────────────── internal ───────────────────────── */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionContext } from 'shared';
-import { putSession, getSession } from '../src/session-store/r2';
+import { putSession, getSession, putSubtitleCache, getSubtitleCache } from '../src/session-store/r2';
 
 /** 极简 in-memory R2 模拟，记录最后一次 put 的 key/httpMetadata */
 function mockBucket(): R2Bucket & { lastPut: { key: string; meta?: R2HTTPMetadata } | null } {
@@ -75,5 +75,38 @@ describe('session-store/r2', () => {
     const dayMs = 86_400_000;
     expect(expiryMs).toBeGreaterThan(before + 23 * 3_600_000);
     expect(expiryMs).toBeLessThan(before + 25 * 3_600_000);
+  });
+});
+
+describe('subtitle cache (r2)', () => {
+  it('putSubtitleCache 后 getSubtitleCache 能取回字幕文本', async () => {
+    const bucket = mockBucket();
+    await putSubtitleCache(bucket, 'vid001', '这是缓存的字幕文本');
+    const text = await getSubtitleCache(bucket, 'vid001');
+    expect(text).toBe('这是缓存的字幕文本');
+  });
+
+  it('getSubtitleCache 不存在 → null', async () => {
+    const bucket = mockBucket();
+    const text = await getSubtitleCache(bucket, 'nope');
+    expect(text).toBeNull();
+  });
+
+  it('putSubtitleCache 写入 key 格式为 subtitles/{videoId}.json', async () => {
+    const bucket = mockBucket();
+    await putSubtitleCache(bucket, 'vid002', '字幕');
+    expect(bucket.lastPut!.key).toBe('subtitles/vid002.json');
+  });
+
+  it('putSubtitleCache 设 TTL 7 天', async () => {
+    const bucket = mockBucket();
+    const before = Date.now();
+    await putSubtitleCache(bucket, 'vid003', '字幕');
+    const expires = bucket.lastPut!.meta?.cacheExpiry;
+    expect(expires).toBeInstanceOf(Date);
+    const expiryMs = (expires as Date).getTime();
+    const weekMs = 604_800_000;
+    expect(expiryMs).toBeGreaterThan(before + 6 * 86_400_000);
+    expect(expiryMs).toBeLessThan(before + 8 * 86_400_000);
   });
 });

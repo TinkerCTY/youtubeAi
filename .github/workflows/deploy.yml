@@ -30,7 +30,7 @@ jobs:
       - name: Type check Worker
         run: npm exec --workspace worker -- tsc --noEmit
 
-      - name: Run Worker Tests (68 TDD cases)
+      - name: Run Worker Tests (TDD cases)
         run: npm test --workspace worker
 
       - name: Build Frontend (Vite → web/dist)
@@ -49,5 +49,7 @@ jobs:
           # 把 GEMINI_API_KEY 注入为 Worker Secret（部署前由 Wrangler 写入）
           secrets: |
             GEMINI_API_KEY
+            PROXY_URL
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}

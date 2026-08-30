@@ -99,3 +99,88 @@ describe('resolveSubtitle (async, T6 fallback)', () => {
     expect(sub?.source).toBe('hardcoded');
   });
 });
+
+/** R2 缓存 + 代理降级测试 */
+function mockBucket(): R2Bucket & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  const bucket: any = {
+    store,
+    async put(key: string, value: string) {
+      store.set(key, value);
+      return { key };
+    },
+    async get(key: string) {
+      const body = store.get(key);
+      if (!body) return null;
+      return { json: async () => JSON.parse(body), text: async () => body };
+    },
+  };
+  return bucket;
+}
+
+describe('resolveSubtitle (R2 cache + proxy)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('R2 缓存命中 → source=cache，不调用 fetch', async () => {
+    const bucket = mockBucket();
+    await bucket.put('subtitles/cache001.json', JSON.stringify({ videoId: 'cache001', text: '缓存字幕' }));
+    const fetcher = vi.fn(async () => {
+      throw new Error('should not be called');
+    }) as Fetcher;
+    vi.stubGlobal('fetch', fetcher);
+    const sub = await resolveSubtitle('cache001', { bucket, fetcher });
+    expect(sub?.source).toBe('cache');
+    expect(sub?.text).toBe('缓存字幕');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('R2 缓存未命中 → 直连成功 → 写入 R2 缓存', async () => {
+    const bucket = mockBucket();
+    const fetcher = mockFetcher({
+      'zh-Hans': { ok: true, status: 200, body: json3('新视频字幕') },
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const sub = await resolveSubtitle('newvid0001', { bucket, fetcher });
+    expect(sub?.source).toBe('live');
+    expect(sub?.text).toContain('新视频字幕');
+    // 验证缓存已写入
+    const cached = bucket.store.get('subtitles/newvid0001.json');
+    expect(cached).toBeDefined();
+    expect(JSON.parse(cached!).text).toContain('新视频字幕');
+  });
+
+  it('直连全失败 → 代理降级成功 → source=proxy', async () => {
+    const fetcher = vi.fn(async (url: any) => {
+      const u = String(url);
+      // 直连请求（不含 proxy 前缀）→ 全部 403
+      if (!u.startsWith('https://proxy.example/')) {
+        return { ok: false, status: 403, text: async () => '' } as unknown as Response;
+      }
+      // 代理请求 → 返回有效字幕
+      return {
+        ok: true,
+        status: 200,
+        text: async () => json3('代理抓到的字幕'),
+      } as unknown as Response;
+    }) as Fetcher;
+    vi.stubGlobal('fetch', fetcher);
+    const sub = await resolveSubtitle('proxy001', {
+      fetcher,
+      proxyUrl: 'https://proxy.example/?url=',
+    });
+    expect(sub?.source).toBe('proxy');
+    expect(sub?.text).toContain('代理抓到的字幕');
+  });
+
+  it('直连 + 代理全失败 → 硬编码兜底', async () => {
+    const fetcher = vi.fn(async () => {
+      return { ok: false, status: 403, text: async () => '' } as unknown as Response;
+    }) as Fetcher;
+    vi.stubGlobal('fetch', fetcher);
+    const sub = await resolveSubtitle(DEMO_VIDEO_ID, {
+      fetcher,
+      proxyUrl: 'https://proxy.example/?url=',
+    });
+    expect(sub?.source).toBe('hardcoded');
+  });
+});

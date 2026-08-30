@@ -26,7 +26,7 @@ export interface SessionContext {
   sessionId: string;
   createdAt: number;
   videoId: string;
-  subtitleSource: 'hardcoded' | 'live';
+  subtitleSource: 'hardcoded' | 'live' | 'cache' | 'proxy';
   subtitleText: string;
   genReqs: GenReqs | null;
   chapters: Chapter[];

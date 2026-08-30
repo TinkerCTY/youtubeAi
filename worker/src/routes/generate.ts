@@ -14,7 +14,10 @@ generateRoutes.post('/api/generate', async (c) => {
   const videoId = parseVideoId(body.videoUrl ?? '');
   if (!videoId) return c.json({ error: 'invalid video url' }, 400);
 
-  const sub = await resolveSubtitle(videoId);
+  const sub = await resolveSubtitle(videoId, {
+    bucket: c.env.SESSION_BUCKET,
+    proxyUrl: c.env.PROXY_URL,
+  });
   if (!sub)
     return c.json(
       {
