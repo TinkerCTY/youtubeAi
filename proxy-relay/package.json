@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "build": "echo \"no build step\"",
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
