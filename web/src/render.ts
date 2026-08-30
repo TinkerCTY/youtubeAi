@@ -88,8 +88,8 @@ export class ArticleRenderer {
   }
 
   /**
-   * 安全 Markdown 解析：先转义 HTML 实体（XSS 防护），再替换 **bold** → <strong>
-   * 流式场景下可能 ** 被拆分到不同 chunk，所以每次从 rawText 全量重新解析
+   * 安全 Markdown 解析：先转义 HTML 实体（XSS 防护），再替换 Markdown 语法为 HTML
+   * 流式场景下 ** 可能被拆分到不同 chunk，所以每次从 rawText 全量重新解析
    */
   private parseMarkdown(raw: string): string {
     // 1. 转义 HTML 实体
@@ -100,11 +100,17 @@ export class ArticleRenderer {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
 
-    // 2. **bold** → <strong>（非贪婪匹配）
+    // 2. **bold** → <strong>（先处理双星号）
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-    // 3. 处理未闭合的 **（流式中途可能只出现一个开头）
-    // 不做处理，等下一个 chunk 补全后自然匹配
+    // 3. *italic* → <em>（后处理单星号，此时 ** 已被替换不会误匹配）
+    s = s.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+
+    // 4. 行首 ### ## # → <strong>（标题转加粗）
+    s = s.replace(/^#{1,6}\s+(.+)$/gm, '<strong>$1</strong>');
+
+    // 5. 行首 - 或 * → • （无序列表标记美化）
+    s = s.replace(/^[\s]*[-*]\s+/gm, '• ');
 
     return s;
   }
@@ -157,7 +163,7 @@ export class ArticleRenderer {
       k.textContent = label;
       const v = document.createElement('div');
       v.className = 'summary-value';
-      v.textContent = resp[key];
+      v.innerHTML = this.parseMarkdown(resp[key]);
       row.appendChild(k);
       row.appendChild(v);
       ch.card.appendChild(row);
