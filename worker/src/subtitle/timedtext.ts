@@ -196,6 +196,60 @@ function extractPlayerResponse(html: string): any | null {
   return null;
 }
 
+/* ───────────────────────── CORS 代理策略 ───────────────────────── */
+
+/**
+ * 通过 CORS 代理拉取 YouTube 字幕
+ * CF Worker 直连 YouTube 被封，但 CORS 代理（非 YouTube 域名）通常可访问
+ */
+export async function fetchViaCorsProxy(
+  videoId: string,
+  opts: FetchTimedTextOptions = {},
+): Promise<string | null> {
+  const languages = opts.languages ?? DEFAULT_LANGS;
+  const fetcher: Fetcher = opts.fetcher ?? fetch;
+
+  for (const lang of languages) {
+    for (const kind of ['', '&kind=asr']) {
+      const ytUrl = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
+        videoId,
+      )}&lang=${encodeURIComponent(lang)}&fmt=json3${kind}`;
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(ytUrl)}`;
+      try {
+        const res = await fetcher(proxyUrl, {
+          headers: { Accept: 'application/json,text/plain,*/*' },
+        });
+        if (!res.ok) continue;
+        const text = await res.text();
+        const extracted = extractTextFromJson3(text);
+        if (extracted) return extracted;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // 不指定语言兜底
+  const defaultYtUrl = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
+    videoId,
+  )}&fmt=json3`;
+  const defaultProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(defaultYtUrl)}`;
+  try {
+    const res = await fetcher(defaultProxyUrl, {
+      headers: { Accept: 'application/json,text/plain,*/*' },
+    });
+    if (res.ok) {
+      const text = await res.text();
+      const extracted = extractTextFromJson3(text);
+      if (extracted) return extracted;
+    }
+  } catch {
+    // 吞掉
+  }
+
+  return null;
+}
+
 /* ───────────────────────── 第三方字幕 API ───────────────────────── */
 
 /**
