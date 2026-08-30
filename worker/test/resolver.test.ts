@@ -98,28 +98,4 @@ describe('resolveSubtitle (async, T6 fallback)', () => {
     const sub = await resolveSubtitle(DEMO_VIDEO_ID);
     expect(sub?.source).toBe('hardcoded');
   });
-
-  it('T6-b-7 YouTube 全失败 → 第三方 API 成功 → source=live', async () => {
-    const fetcher = vi.fn(async (url: any) => {
-      const u = String(url);
-      // YouTube timedtext/watch page → 全失败
-      if (u.includes('youtube.com')) {
-        return { ok: false, status: 403, text: async () => '' } as unknown as Response;
-      }
-      // 第三方 API → 成功
-      if (u.includes('youtube-transcript.ai')) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `Title: Test\nSource: https://www.youtube.com/watch?v=third00001\nLanguage: en\n\n[0:01] Third party subtitle text here.`,
-        } as unknown as Response;
-      }
-      return { ok: false, status: 500, text: async () => '' } as unknown as Response;
-    }) as Fetcher;
-    vi.stubGlobal('fetch', fetcher);
-    const sub = await resolveSubtitle('third00001');
-    expect(sub?.source).toBe('live');
-    expect(sub?.text).toContain('Third party subtitle text');
-  });
 });

@@ -3,7 +3,6 @@ import type { GenReqs, SummaryResponse } from 'shared';
 export interface GeneratePayload {
   videoUrl: string;
   genReqs?: GenReqs;
-  subtitleText?: string;
 }
 
 /** POST /api/generate → 返回 SSE ReadableStream */
