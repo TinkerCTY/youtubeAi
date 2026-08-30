@@ -9,6 +9,7 @@ interface ChapterEl {
   body: HTMLElement;
   section: HTMLElement;
   card: HTMLElement | null; // 5W1H 卡片容器
+  rawText: string; // 累积流式文本，用于 Markdown 解析
 }
 
 type Summarizer = (chapterId: string) => Promise<SummaryResponse>;
@@ -68,14 +69,15 @@ export class ArticleRenderer {
     section.appendChild(body);
 
     this.root.appendChild(section);
-    const el: ChapterEl = { id, body, section, card: null };
+    const el: ChapterEl = { id, body, section, card: null, rawText: '' };
     this.chapters.set(id, el);
     this.current = el;
   }
 
   appendText(text: string): void {
     if (!this.current) this.startChapter('0', '正文');
-    this.current!.body.textContent += text;
+    this.current!.rawText += text;
+    this.current!.body.innerHTML = this.parseMarkdown(this.current!.rawText);
   }
 
   showError(message: string): void {
@@ -83,6 +85,28 @@ export class ArticleRenderer {
     p.className = 'error-msg';
     p.textContent = `生成失败：${message}`;
     this.root.appendChild(p);
+  }
+
+  /**
+   * 安全 Markdown 解析：先转义 HTML 实体（XSS 防护），再替换 **bold** → <strong>
+   * 流式场景下可能 ** 被拆分到不同 chunk，所以每次从 rawText 全量重新解析
+   */
+  private parseMarkdown(raw: string): string {
+    // 1. 转义 HTML 实体
+    let s = raw
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    // 2. **bold** → <strong>（非贪婪匹配）
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // 3. 处理未闭合的 **（流式中途可能只出现一个开头）
+    // 不做处理，等下一个 chunk 补全后自然匹配
+
+    return s;
   }
 
   private async onClickSummary(chapterId: string, btn: HTMLButtonElement): Promise<void> {
