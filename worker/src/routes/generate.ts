@@ -10,16 +10,23 @@ import { putSession } from '../session-store/r2';
 export const generateRoutes = new Hono<{ Bindings: Env }>();
 
 generateRoutes.post('/api/generate', async (c) => {
-  const body = await c.req.json<{ videoUrl: string; genReqs?: GenReqs }>();
+  const body = await c.req.json<{ videoUrl: string; genReqs?: GenReqs; subtitleText?: string }>();
   const videoId = parseVideoId(body.videoUrl ?? '');
   if (!videoId) return c.json({ error: 'invalid video url' }, 400);
 
-  const sub = await resolveSubtitle(videoId);
+  // 优先使用客户端（浏览器端）抓取的字幕，避免 CF Worker IP 被 YouTube 封锁
+  let sub: { videoId: string; source: 'hardcoded' | 'live'; text: string } | null = null;
+  if (body.subtitleText && body.subtitleText.trim().length > 50) {
+    sub = { videoId, source: 'live', text: body.subtitleText.trim() };
+  } else {
+    sub = await resolveSubtitle(videoId);
+  }
+
   if (!sub)
     return c.json(
       {
         error:
-          '该视频无可用字幕（实时抓取失败且非演示视频）。建议使用演示视频：https://www.youtube.com/watch?v=xRh2sVcNXQ8',
+          '该视频无可用字幕（浏览器端和服务端均抓取失败，且非演示视频）。建议使用演示视频：https://www.youtube.com/watch?v=xRh2sVcNXQ8',
       },
       404,
     );
