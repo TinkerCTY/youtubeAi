@@ -5,7 +5,7 @@ export type Fetcher = typeof fetch;
 export interface FetchTimedTextOptions {
   /** 覆盖 fetch，测试用注入 mock */
   fetcher?: Fetcher;
-  /** 按顺序尝试的语言，默认 zh-Hans → zh-CN → en */
+  /** 按顺序尝试的语言，默认 zh-Hans → zh-CN → zh → zh-Hant → en */
   languages?: readonly string[];
   /** 单语言请求超时 ms（默认 4s，Cloudflare Worker SLA 容忍即可） */
   timeoutMs?: number;
@@ -20,11 +20,12 @@ const FETCH_HEADERS: Record<string, string> = {
 };
 
 /**
- * 拉取 YouTube timedtext（json3 格式）→ 拼接成纯文本
- * 最佳努力 best-effort：网络 4xx/5xx / 验证码 / 解析失败 / 内容为空 都会抛错，
- * 由 resolver 层降级到硬编码字幕。
+ * 拉取 YouTube 字幕 → 拼接成纯文本
+ * best-effort：失败由 resolver 层降级到硬编码字幕。
  *
- * 策略：每种语言先试手动字幕，再试自动字幕（kind=asr），最后试不指定语言（让 YouTube 返回默认）。
+ * 策略（按优先级）：
+ * 1. timedtext API：逐语言手动 → asr → 不指定语言（快速但常被 CF IP 封）
+ * 2. watch page 解析：抓视频页 HTML → 从 ytInitialPlayerResponse 提取带 token 的字幕 URL → 下载字幕
  */
 export async function fetchTimedText(
   videoId: string,
@@ -34,7 +35,7 @@ export async function fetchTimedText(
   const fetcher: Fetcher = opts.fetcher ?? fetch;
   const errors: string[] = [];
 
-  // 1) 逐语言尝试：手动字幕 → 自动字幕（kind=asr）
+  // 1) timedtext API：逐语言尝试手动 → asr
   for (const lang of languages) {
     for (const kind of ['', '&kind=asr']) {
       const url = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
@@ -58,7 +59,7 @@ export async function fetchTimedText(
     }
   }
 
-  // 2) 最后尝试：不指定语言，让 YouTube 返回默认字幕
+  // 2) timedtext API：不指定语言兜底
   const defaultUrl = `https://www.youtube.com/api/timedtext?v=${encodeURIComponent(
     videoId,
   )}&fmt=json3`;
@@ -74,10 +75,128 @@ export async function fetchTimedText(
     errors.push(`default: ${(e as Error).message}`);
   }
 
+  // 3) Watch page 解析：从视频页提取带 token 的字幕 URL
+  try {
+    const watchText = await fetchFromWatchPage(videoId, fetcher);
+    if (watchText) return { videoId, source: 'live', text: watchText };
+    errors.push('watchpage: no captions found');
+  } catch (e) {
+    errors.push(`watchpage: ${(e as Error).message}`);
+  }
+
   throw new Error(`fetchTimedText(${videoId}) failed: ${errors.join(' | ')}`);
 }
 
-/* ───────────────────────── internal ───────────────────────── */
+/* ───────────────────────── watch page 解析 ───────────────────────── */
+
+/**
+ * 从 YouTube 视频页 HTML 提取字幕：
+ * 1. 抓 watch page HTML
+ * 2. 从 ytInitialPlayerResponse 解析 caption tracks
+ * 3. 按语言优先级逐个下载字幕内容
+ */
+async function fetchFromWatchPage(
+  videoId: string,
+  fetcher: Fetcher,
+): Promise<string | null> {
+  const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&gl=US&hl=en`;
+  const res = await fetcher(url, {
+    headers: {
+      ...FETCH_HEADERS,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+  });
+  if (!res.ok) throw new Error(`watch page HTTP ${res.status}`);
+  const html = await res.text();
+
+  const playerResponse = extractPlayerResponse(html);
+  if (!playerResponse) throw new Error('ytInitialPlayerResponse not found in HTML');
+
+  const tracks =
+    playerResponse?.captions?.playerCaptionsTrackRendererTracklist;
+  if (!Array.isArray(tracks) || !tracks.length) throw new Error('no caption tracks in player response');
+
+  // 按语言优先级排序：中文简体 > 中文 > 英文 > 其他
+  const langScore = (lang: string): number => {
+    if (lang.startsWith('zh-Hans') || lang.startsWith('zh-CN')) return 0;
+    if (lang.startsWith('zh')) return 1;
+    if (lang.startsWith('en')) return 2;
+    return 3;
+  };
+  const sortedTracks = [...tracks].sort(
+    (a, b) => langScore(a?.languageCode ?? '') - langScore(b?.languageCode ?? ''),
+  );
+
+  // 逐个下载字幕
+  for (const track of sortedTracks) {
+    const baseUrl = track?.baseUrl;
+    if (!baseUrl || typeof baseUrl !== 'string') continue;
+
+    // 附加 fmt=json3（如果 URL 里还没有）
+    const captionUrl = baseUrl + (baseUrl.includes('fmt=') ? '' : '&fmt=json3');
+    try {
+      const captionRes = await fetcher(captionUrl, { headers: FETCH_HEADERS });
+      if (!captionRes.ok) continue;
+      const captionText = await captionRes.text();
+      const extracted = extractTextFromJson3(captionText);
+      if (extracted) return extracted;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 从 YouTube watch page HTML 中安全提取 ytInitialPlayerResponse JSON
+ * 使用大括号深度计数 + 字符串/转义感知，避免正则匹配大 JSON 的陷阱
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractPlayerResponse(html: string): any | null {
+  const marker = 'ytInitialPlayerResponse';
+  const startIdx = html.indexOf(marker);
+  if (startIdx === -1) return null;
+
+  const jsonStart = html.indexOf('{', startIdx);
+  if (jsonStart === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = jsonStart; i < html.length; i++) {
+    const c = html[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\') {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '{') depth++;
+    if (c === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(html.slice(jsonStart, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/* ───────────────────────── json3 解析 ───────────────────────── */
 
 interface Json3Event {
   segs?: Array<{ utf8?: string }>;

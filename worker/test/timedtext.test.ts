@@ -20,6 +20,14 @@ function mockFetcher(responses: Array<{ ok: boolean; status: number; body: strin
   }) as Fetcher;
 }
 
+/** 构造模拟 watch page HTML（含 ytInitialPlayerResponse + caption tracks） */
+function watchPageHtml(tracks: Array<{ languageCode: string; baseUrl: string }>): string {
+  const playerResponse = JSON.stringify({
+    captions: { playerCaptionsTrackRendererTracklist: tracks },
+  });
+  return `<html><body><script>var ytInitialPlayerResponse = ${playerResponse};</script></body></html>`;
+}
+
 describe('fetchTimedText', () => {
   const VID = 'abc00000001';
 
@@ -37,42 +45,37 @@ describe('fetchTimedText', () => {
     const sub = await fetchTimedText(VID, { fetcher, languages: ['zh-Hans'] });
     expect(sub.videoId).toBe(VID);
     expect(sub.source).toBe('live');
-    // 每个 event 一行；同 event 内 seg 直接拼接
     expect(sub.text).toContain('第一句：我们聊聊 AI。');
     expect(sub.text).toContain('第二句，成本暴跌。');
     expect(sub.text).toMatch(/\n/);
   });
 
   it('T6-a-2 YouTube 403（验证码/机器人）→ 抛错，触发上层降级', async () => {
-    // 默认 5 语言 × 2 kind + 1 default = 11 次请求，全返回 403
-    const responses = Array.from({ length: 11 }, () => ({
-      ok: false,
-      status: 403,
-      body: '',
-    }));
+    // 默认 5 语言 × 2 kind + 1 default = 11 次 API 请求 + 1 watch page = 12 次全失败
+    const responses = Array.from({ length: 12 }, () => ({ ok: false, status: 403, body: '' }));
     const fetcher = mockFetcher(responses);
     await expect(fetchTimedText(VID, { fetcher })).rejects.toThrow(/403|timedtext/);
   });
 
   it('T6-a-3 返回非预期 JSON（{} 缺 events）→ 抛错并降级', async () => {
-    const responses = Array.from({ length: 11 }, (_, i) => ({
+    const responses = Array.from({ length: 12 }, (_, i) => ({
       ok: true,
       status: 200,
-      body: i === 0 ? '{}' : i === 1 ? '{"events":null}' : '<html>captcha</html>',
+      body: i < 11 ? '{}' : '<html>no player response</html>',
     }));
     const fetcher = mockFetcher(responses);
-    await expect(fetchTimedText(VID, { fetcher })).rejects.toThrow(/parse|empty|timedtext/);
+    await expect(fetchTimedText(VID, { fetcher })).rejects.toThrow(/parse|empty|timedtext|not found/);
   });
 
   it('T6-a-4 返回 events 但所有 segs 空/全是纯空白 → 抛错 empty', async () => {
     const emptyPayload = json3Payload([{ segs: [{ utf8: ' ' }] }, { segs: [{ utf8: '\n' }] }]);
-    const responses = Array.from({ length: 11 }, () => ({
+    const responses = Array.from({ length: 12 }, () => ({
       ok: true,
       status: 200,
       body: emptyPayload,
     }));
     const fetcher = mockFetcher(responses);
-    await expect(fetchTimedText(VID, { fetcher })).rejects.toThrow(/empty|timedtext/);
+    await expect(fetchTimedText(VID, { fetcher })).rejects.toThrow(/empty|timedtext|not found/);
   });
 
   it('T6-a-5 zh-Hans 手动+asr 均失败 → 回退 zh-CN 成功', async () => {
@@ -126,5 +129,69 @@ describe('fetchTimedText', () => {
     const sub = await fetchTimedText(VID, { fetcher, languages: ['zh-Hans', 'zh-CN'] });
     expect(sub.source).toBe('live');
     expect(sub.text).toContain('默认字幕');
+  });
+
+  it('T6-a-9 timedtext API 全失败 → watch page 解析成功提取字幕', async () => {
+    const html = watchPageHtml([
+      { languageCode: 'zh-CN', baseUrl: 'https://caption.example.com/zh' },
+      { languageCode: 'en', baseUrl: 'https://caption.example.com/en' },
+    ]);
+    const fetcher = mockFetcher([
+      // timedtext API（单语言 × 2 kind + default = 3 次全失败）
+      { ok: false, status: 403, body: '' },
+      { ok: false, status: 403, body: '' },
+      { ok: false, status: 403, body: '' },
+      // watch page HTML
+      { ok: true, status: 200, body: html },
+      // caption track URL → json3 字幕
+      {
+        ok: true,
+        status: 200,
+        body: json3Payload([{ segs: [{ utf8: '从 watch page 提取的字幕内容' }] }]),
+      },
+    ]);
+    const sub = await fetchTimedText(VID, { fetcher, languages: ['zh-Hans'] });
+    expect(sub.source).toBe('live');
+    expect(sub.text).toContain('从 watch page 提取的字幕内容');
+  });
+
+  it('T6-a-10 watch page 返回 HTML 但无 caption tracks → 抛错', async () => {
+    const html = `<html><script>var ytInitialPlayerResponse = ${JSON.stringify({
+      captions: { playerCaptionsTrackRendererTracklist: [] },
+    })};</script></html>`;
+    const fetcher = mockFetcher([
+      // timedtext API 全失败
+      { ok: false, status: 403, body: '' },
+      { ok: false, status: 403, body: '' },
+      { ok: false, status: 403, body: '' },
+      // watch page HTML → 无 caption tracks
+      { ok: true, status: 200, body: html },
+    ]);
+    await expect(
+      fetchTimedText(VID, { fetcher, languages: ['zh-Hans'] }),
+    ).rejects.toThrow(/no caption tracks|timedtext/);
+  });
+
+  it('T6-a-11 watch page 优先选择中文字幕（排序验证）', async () => {
+    const html = watchPageHtml([
+      { languageCode: 'en', baseUrl: 'https://caption.example.com/en' },
+      { languageCode: 'zh-CN', baseUrl: 'https://caption.example.com/zh' },
+    ]);
+    const fetcher = mockFetcher([
+      // timedtext API 全失败
+      { ok: false, status: 403, body: '' },
+      { ok: false, status: 403, body: '' },
+      { ok: false, status: 403, body: '' },
+      // watch page HTML
+      { ok: true, status: 200, body: html },
+      // 第一个 caption track URL（zh-CN 排序在前）
+      {
+        ok: true,
+        status: 200,
+        body: json3Payload([{ segs: [{ utf8: '中文字幕优先' }] }]),
+      },
+    ]);
+    const sub = await fetchTimedText(VID, { fetcher, languages: ['zh-Hans'] });
+    expect(sub.text).toContain('中文字幕优先');
   });
 });
