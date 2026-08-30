@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fetchTimedText, type Fetcher } from '../src/subtitle/timedtext';
+import { fetchTimedText, fetchThirdPartyTranscript, type Fetcher } from '../src/subtitle/timedtext';
 
 /** 伪造 json3 响应体 */
 function json3Payload(events: Array<{ segs: Array<{ utf8: string }> }>): string {
@@ -193,5 +193,86 @@ describe('fetchTimedText', () => {
     ]);
     const sub = await fetchTimedText(VID, { fetcher, languages: ['zh-Hans'] });
     expect(sub.text).toContain('中文字幕优先');
+  });
+});
+
+/* ───────────────────────── 第三方 API 测试 ───────────────────────── */
+
+describe('fetchThirdPartyTranscript', () => {
+  const VID = 'testvid0011';
+
+  /** 模拟 youtube-transcript.ai 的响应格式 */
+  const THIRD_PARTY_RESPONSE = `Title: Some Video
+Source: https://www.youtube.com/watch?v=testvid0011
+Language: en
+Generated: true
+Duration: 10:30
+Words: 1500
+
+[0:01] Hello everyone, welcome to this video.
+[0:15] Today we're going to talk about &gt;&gt; something important.
+[0:32] This is a &amp; test of HTML entities like &lt;tags&gt; and &quot;quotes&quot;.`;
+
+  it('成功抓取并清理第三方字幕文本', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => THIRD_PARTY_RESPONSE,
+    })) as unknown as Fetcher;
+
+    const result = await fetchThirdPartyTranscript(VID, { fetcher });
+    expect(result).not.toBeNull();
+    expect(result).toContain('Hello everyone');
+    expect(result).toContain('>> something important');
+    expect(result).toContain('a & test');
+    expect(result).toContain('<tags>');
+    expect(result).toContain('"quotes"');
+    // 不应包含 header 行
+    expect(result).not.toContain('Title:');
+    expect(result).not.toContain('Source:');
+    // 不应包含时间戳
+    expect(result).not.toContain('[0:01]');
+  });
+
+  it('HTTP 404 返回 null', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      text: async () => 'Not found',
+    })) as unknown as Fetcher;
+
+    const result = await fetchThirdPartyTranscript(VID, { fetcher });
+    expect(result).toBeNull();
+  });
+
+  it('空响应返回 null', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => '',
+    })) as unknown as Fetcher;
+
+    const result = await fetchThirdPartyTranscript(VID, { fetcher });
+    expect(result).toBeNull();
+  });
+
+  it('无时间戳的响应返回 null', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => 'Just some text\nwithout timestamps\nno header either',
+    })) as unknown as Fetcher;
+
+    const result = await fetchThirdPartyTranscript(VID, { fetcher });
+    expect(result).toBeNull();
+  });
+
+  it('网络异常返回 null', async () => {
+    const fetcher = vi.fn(async () => {
+      throw new Error('network error');
+    }) as unknown as Fetcher;
+
+    const result = await fetchThirdPartyTranscript(VID, { fetcher });
+    expect(result).toBeNull();
   });
 });

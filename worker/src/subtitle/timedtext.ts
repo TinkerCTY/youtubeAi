@@ -196,6 +196,69 @@ function extractPlayerResponse(html: string): any | null {
   return null;
 }
 
+/* ───────────────────────── 第三方字幕 API ───────────────────────── */
+
+/**
+ * 从第三方 API (youtube-transcript.ai) 抓取字幕
+ * CF Worker 访问 YouTube 直连会被封，但第三方服务通常不受影响
+ */
+export async function fetchThirdPartyTranscript(
+  videoId: string,
+  opts: { fetcher?: Fetcher; timeoutMs?: number } = {},
+): Promise<string | null> {
+  const fetcher: Fetcher = opts.fetcher ?? fetch;
+  const url = `https://youtube-transcript.ai/transcript/${encodeURIComponent(videoId)}.txt`;
+
+  try {
+    const res = await fetcher(url, {
+      headers: FETCH_HEADERS,
+      signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
+    });
+    if (!res.ok) return null;
+    const raw = await res.text();
+    return cleanThirdPartyTranscript(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 清理第三方 API 返回的字幕文本：
+ * 1. 去掉 header 行（Title/Source/Language/Generated/Duration/Words）
+ * 2. 去掉时间戳 [0:01] [0:32] 等
+ * 3. 转换 HTML 实体 &gt; → > 等
+ * 4. 合并为纯文本
+ */
+function cleanThirdPartyTranscript(raw: string): string | null {
+  const lines = raw.split('\n');
+  const contentLines: string[] = [];
+  let pastHeader = false;
+
+  for (const line of lines) {
+    // 检测 header 结束（第一个 [timestamp] 行）
+    if (!pastHeader) {
+      if (/^\[\d+:\d+\]/.test(line.trim())) {
+        pastHeader = true;
+      } else {
+        continue;
+      }
+    }
+    // 去掉时间戳 + HTML 实体转换
+    const cleaned = line
+      .replace(/^\[\d+:\d+\]\s*/, '')
+      .replace(/&gt;/g, '>')
+      .replace(/&lt;/g, '<')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .trim();
+    if (cleaned) contentLines.push(cleaned);
+  }
+
+  if (!contentLines.length) return null;
+  return contentLines.join(' ');
+}
+
 /* ───────────────────────── json3 解析 ───────────────────────── */
 
 interface Json3Event {
