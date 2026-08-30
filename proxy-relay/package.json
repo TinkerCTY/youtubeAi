@@ -1,0 +1,13 @@
+{
+  "name": "proxy-relay",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "undici": "^6.19.0"
+  }
+}
