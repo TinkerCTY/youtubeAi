@@ -28,10 +28,22 @@ import http from 'node:http';
 import { ProxyAgent, fetch } from 'undici';
 
 const PORT = process.env.PORT || 3000;
-const PROXY_USERNAME = process.env.PROXY_USERNAME || '';
-const PROXY_PASSWORD = process.env.PROXY_PASSWORD || '';
-const PROXY_HOST = process.env.PROXY_HOST || 'p.webshare.io';
-const PROXY_PORT = process.env.PROXY_PORT || '80';
+
+// ⚠️  Webshare Rotating Residential 官方配置（从 Endpoint Generator 获取）
+//     curl 示例：curl --proxy "http://jlkwejwd-rotate:mkxz3lp0gblf@p.webshare.io:80" "https://ipv4.webshare.io/"
+//     优先级：代码写死的官方值 > 环境变量，避免 Render Dashboard 保存机制异常造成旧值生效
+const FORCE_OFFICIAL_CONFIG = true;
+const OFFICIAL = {
+  username: 'jlkwejwd-rotate',
+  password: 'mkxz3lp0gblf',
+  host: 'p.webshare.io',
+  port: '80',
+};
+
+const PROXY_USERNAME = FORCE_OFFICIAL_CONFIG ? OFFICIAL.username : (process.env.PROXY_USERNAME || OFFICIAL.username);
+const PROXY_PASSWORD = FORCE_OFFICIAL_CONFIG ? OFFICIAL.password : (process.env.PROXY_PASSWORD || OFFICIAL.password);
+const PROXY_HOST = FORCE_OFFICIAL_CONFIG ? OFFICIAL.host : (process.env.PROXY_HOST || OFFICIAL.host);
+const PROXY_PORT = FORCE_OFFICIAL_CONFIG ? OFFICIAL.port : (process.env.PROXY_PORT || OFFICIAL.port);
 
 if (!PROXY_USERNAME || !PROXY_PASSWORD) {
   console.error('PROXY_USERNAME and PROXY_PASSWORD are required');
