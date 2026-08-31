@@ -94,24 +94,12 @@ export function parseWatchPageCaptions(html: string): CaptionTrack[] | null {
     const languageCode = String(t.languageCode || '').trim();
     if (!languageCode) continue;
 
-    // baseUrl: 1) 补齐 https://www.youtube.com 相对路径；2) 注入 fmt=json3
+    // baseUrl: 仅用纯字符串处理 → 不破坏签名校验：
+    //   1) 相对路径 → 前缀补 https://www.youtube.com
+    //   2) ⚠️  绝对不要：注入 fmt=json3（会破坏签名）、不要用 new URL() 类重编码（逗号会变成 %2C）
     let base: string = t.baseUrl;
     if (base.startsWith('/')) {
       base = 'https://www.youtube.com' + base;
-    }
-    // 注入 fmt=json3（注意 baseUrl 可能原本已带 fmt=vtt 等）
-    try {
-      const u = new URL(base);
-      // 如果已经带 fmt=，覆盖为 json3；否则追加
-      u.searchParams.set('fmt', 'json3');
-      base = u.toString();
-    } catch {
-      // 非法 URL，手动 try 用字符串拼接
-      if (base.includes('fmt=')) {
-        base = base.replace(/([?&])fmt=[^&]*/g, '$1fmt=json3');
-      } else {
-        base += base.includes('?') ? '&fmt=json3' : '?fmt=json3';
-      }
     }
 
     normalized.push({
@@ -287,7 +275,10 @@ async function runFetches(
     }
     try {
       const text = await res.text();
-      const extracted = extractTextFromJson3(text);
+      // 双 fallback 解析：
+      //   1) json3（手工枚举候选 URL 注入了 fmt=json3 → 走这个分支）
+      //   2) TTML XML（watch-page 来的 signed baseUrl，不允许改 fmt，默认返回 TTML）
+      const extracted = extractTextFromJson3(text) ?? extractTextFromTtml(text);
       if (extracted) {
         return {
           videoId,
@@ -330,4 +321,78 @@ function extractTextFromJson3(raw: string): string | null {
   } catch (_e) {
     return null;
   }
+}
+
+/**
+ * 从 TTML/XML 字幕格式中提取纯文本（YouTube signed baseUrl 默认返回 TTML XML）。
+ * 纯字符串/正则实现，不依赖 DOMParser，在 Cloudflare Worker 中可用。
+ *
+ * 规则：
+ *   - 找所有 <p ...>...</p> 段落，按出现顺序排列
+ *   - 每个段落内部：剥离 XML 标签（<span>, <metadata> 等），<br/> / <br /> / <br> 换成换行
+ *   - 处理 XML 实体：&amp; &lt; &gt; &quot; &apos; &#NNN; &#xHHH;
+ *   - 去除首尾空白和空段落
+ */
+export function extractTextFromTtml(raw: string): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+
+  // 快速检查：至少要有 <p 标签，否则可能根本不是 TTML
+  if (!/<p\b/i.test(raw)) return null;
+
+  // 1) 提取所有 <p ...> 段落（包含嵌套标签）
+  // 使用迭代式匹配：找 <p 的起始位置 → 找对应 </p> 结束位置
+  const paragraphs: string[] = [];
+  const lower = raw;
+  let searchFrom = 0;
+  while (true) {
+    const openStart = lower.indexOf('<p', searchFrom);
+    if (openStart < 0) break;
+    // 跳过 p 标签的属性到 >
+    const openEnd = lower.indexOf('>', openStart);
+    if (openEnd < 0) break;
+
+    // 找最近的 </p>（处理嵌套：简单正则足够，TTML 段落不嵌套 p）
+    const closeTag = lower.indexOf('</p>', openEnd);
+    if (closeTag < 0) break;
+
+    const inner = lower.slice(openEnd + 1, closeTag);
+    paragraphs.push(inner);
+    searchFrom = closeTag + 4;
+  }
+
+  if (!paragraphs.length) return null;
+
+  // 2) 对每个段落：<br/> → 换行；剥去所有 XML 标签；解码实体
+  const lines: string[] = [];
+  for (const para of paragraphs) {
+    let text = para;
+    // <br/>, <br />, <br> → \n（保持段落内部换行）
+    text = text.replace(/<br\s*\/?>\s*/gi, '\n');
+    // 去掉其他所有 <...> 标签（包括 <span>, <style>, <meta> 等，非贪婪）
+    text = text.replace(/<\/?[a-zA-Z][^>]*>/g, '');
+    // 解码 XML 实体
+    text = decodeXmlEntities(text);
+    // 段落内部按换行拆分，每行 trim（因为 XML 里可能有 CDATA 换行/缩进）
+    const subLines = text.split('\n');
+    for (const sl of subLines) {
+      const trimmed = sl.trim();
+      if (trimmed) lines.push(trimmed);
+    }
+  }
+
+  if (!lines.length) return null;
+  return lines.join('\n');
+}
+
+/** 解码 XML 实体：&amp; &lt; &gt; &quot; &apos; + &#NNN; + &#xHHH; */
+function decodeXmlEntities(s: string): string {
+  if (!s.includes('&')) return s;
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&') // 必须在最后一步，避免再触发上面的 &xx;
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCharCode(parseInt(d, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => String.fromCharCode(parseInt(h, 16)));
 }

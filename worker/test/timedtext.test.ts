@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fetchTimedText, type Fetcher, parseWatchPageCaptions } from '../src/subtitle/timedtext';
+import { fetchTimedText, type Fetcher, parseWatchPageCaptions, extractTextFromTtml } from '../src/subtitle/timedtext';
 
 /** 伪造 json3 响应体 */
 function json3Payload(events: Array<{ segs: Array<{ utf8: string }> }>): string {
@@ -186,9 +186,12 @@ describe('parseWatchPageCaptions (from ytInitialPlayerResponse)', () => {
     // 第一个应该是 zh 语言（不是 en）
     expect(tracks![0].languageCode).toMatch(/^zh/);
 
-    // 每个 baseUrl 都必须带 fmt=json3
+    // ⚠️  关键：parseWatchPageCaptions 不注入 fmt=json3（防止破坏 YouTube 签名校验）
+    // 因为 watch-page 来的 signed baseUrl 带 signature=... 和 sparams=ip,ipbits,... 逗号原始编码
+    // 一旦注入 fmt 或重编码逗号，签名校验失败 → YouTube 静默返回空 events
     for (const t of tracks!) {
-      expect(t.baseUrl).toContain('fmt=json3');
+      expect(t.baseUrl).not.toContain('fmt=json3');
+      expect(t.baseUrl).not.toContain('%2C'); // 逗号保持原样
     }
 
     // 相对路径以 https://www.youtube.com 开头（补齐）
@@ -272,12 +275,204 @@ describe('fetchTimedText with watch-page fallback (captions parser)', () => {
     expect(sub.text).toContain('AI 第几局');
     expect(sub.text).toContain('watch page parser');
 
-    // 最后一次请求必须是 finalCaptionsBase（加上 fmt=json3 参数）
+    // 最后一次请求必须是 finalCaptionsBase（注意：signed baseUrl 不允许注入 fmt，否则破坏签名 → 保持原样）
     // 注意：proxy 模式下 buildUrl 会对 target 做 encodeURIComponent，所以断言也要用编码后的值
     const lastCall = calls[calls.length - 1];
     expect(lastCall).toContain(encodeURIComponent(finalCaptionsBase));
-    expect(lastCall).toContain(encodeURIComponent('fmt=json3'));
     // 同时确认代理前缀正确
     expect(lastCall.startsWith('https://relay.example.com/?url=')).toBe(true);
+  });
+});
+
+/* ───────────── T6-b+: 签名保护 & TTML 解析器 ───────────── */
+
+describe('parseWatchPageCaptions: 签名保护（不注入fmt/不重编码sparams逗号）', () => {
+  it('T6-b-6 带 sparams 逗号和 signature 的 baseUrl 必须保持原样，不注入 fmt=json3，不重编码逗号', () => {
+    const SIGNED =
+      'https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ' +
+      '&ei=abcXYZ&caps=asr&ip=0.0.0.0&ipbits=0&expire=9999999999' +
+      '&sparams=ip,ipbits,expire,v,ei,caps' + // ← 里面的逗号绝对不能编码为 %2C
+      '&signature=DEADBEEF.CAFEBABE';
+    const player = {
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          captionTracks: [
+            {
+              baseUrl: SIGNED,
+              languageCode: 'en',
+              kind: 'asr',
+              vssId: 'a.en',
+              name: { simpleText: 'English (auto)' },
+            },
+          ],
+        },
+      },
+    };
+    const html = buildWatchHtml(player);
+    const tracks = parseWatchPageCaptions(html);
+    expect(tracks).toBeDefined();
+    expect(tracks!.length).toBe(1);
+    const got = tracks![0].baseUrl;
+
+    // 🔥 关键断言 1：sparams=ip,ipbits,... 里的逗号保持原样（逗号=逗号，不是 %2C）
+    expect(got).toContain('sparams=ip,ipbits,expire,v,ei,caps');
+    expect(got).not.toContain('%2C');
+
+    // 🔥 关键断言 2：不要注入 fmt=json3（破坏签名）
+    expect(got).not.toContain('fmt=json3');
+    expect(got).not.toContain('fmt=vtt');
+
+    // 🔥 关键断言 3：signature 保持完整
+    expect(got).toContain('&signature=DEADBEEF.CAFEBABE');
+  });
+
+  it('T6-b-7 无签名的 /relative/path 仍然补全前缀，但不注入 fmt', () => {
+    const player = {
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          captionTracks: [
+            {
+              baseUrl: '/relative/path?lang=zh-Hans&v=abc',
+              languageCode: 'zh-Hans',
+              vssId: '.zh-Hans',
+            },
+          ],
+        },
+      },
+    };
+    const html = buildWatchHtml(player);
+    const tracks = parseWatchPageCaptions(html);
+    expect(tracks!.length).toBe(1);
+    const got = tracks![0].baseUrl;
+    expect(got.startsWith('https://www.youtube.com/relative/path')).toBe(true);
+    expect(got).not.toContain('fmt=json3'); // 不注入
+  });
+});
+
+/* ───────────── T6-c: extractTextFromTtml (TTML XML 解析) ───────────── */
+
+describe('extractTextFromTtml', () => {
+  it('T6-c-1 标准 TTML：<p begin="..." end="...">文本</p> → 每行一个，按文档顺序，<br/>转换行', () => {
+    const ttml = `<?xml version="1.0" encoding="utf-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml">
+  <body>
+    <div>
+      <p begin="00:00:01.000" end="00:00:04.000" region="pop1">第一行：<span style="s1">Marc</span>，你好吗？</p>
+      <p begin="00:00:05.000" end="00:00:08.000">第二行<br/>我很好，谢谢！</p>
+      <p begin="00:00:09.000" end="00:00:11.000">第三行 AI 第几局？</p>
+    </div>
+  </body>
+</tt>`;
+    const text = extractTextFromTtml(ttml);
+    expect(text).not.toBeNull();
+    expect(text).toContain('第一行：Marc，你好吗？');
+    expect(text).toContain('第二行');
+    expect(text).toContain('我很好，谢谢！');
+    expect(text).toContain('第三行 AI 第几局？');
+    // 不应该包含 XML 标签或属性
+    expect(text).not.toMatch(/<\/?[a-z]/i);
+  });
+
+  it('T6-c-2 空段落 / 只有空白的段落 → 跳过，最终返回 null（和 json3 行为一致）', () => {
+    const empty = `<?xml version="1.0"?>
+<tt><body><div>
+  <p>   </p>
+  <p begin="0">  \n  </p>
+</div></body></tt>`;
+    expect(extractTextFromTtml(empty)).toBeNull();
+    expect(extractTextFromTtml('')).toBeNull();
+    expect(extractTextFromTtml('not xml at all')).toBeNull();
+  });
+
+  it('T6-c-3 HTML 实体 &amp;/&quot;/&apos;/&lt;/&gt; 正确解码', () => {
+    const ttml = `<?xml version="1.0"?>
+<tt><body><div>
+  <p>A &amp; B "quote" &apos;x&apos; &lt;tag&gt;</p>
+</div></body></tt>`;
+    const text = extractTextFromTtml(ttml);
+    expect(text).toContain(`A & B "quote" 'x' <tag>`);
+  });
+
+  it('T6-c-4 中文 TTML + 多个 div → 全部拼接，空字符串 trim 掉', () => {
+    const ttml = `<?xml version="1.0"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="zh-CN">
+  <body>
+    <div>
+      <p begin="0">   </p>
+      <p begin="1s">你正在收看的是——一档全新的 AI 访谈节目 。</p>
+      <p begin="3s">让我们欢迎今天的嘉宾：  Marc  </p>
+    </div>
+    <div>
+      <p begin="5s">Marc：很高兴来到这里。</p>
+    </div>
+  </body>
+</tt>`;
+    const text = extractTextFromTtml(ttml);
+    expect(text).not.toBeNull();
+    const lines = text!.split('\n');
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    expect(text).toContain('你正在收看的是——一档全新的 AI 访谈节目 。');
+    expect(text).toContain('让我们欢迎今天的嘉宾：  Marc');
+    expect(text).toContain('Marc：很高兴来到这里。');
+  });
+});
+
+/* ───────────── T6-d: fetchTimedText watch-page 返回 TTML → 成功解析 ───────────── */
+
+describe('fetchTimedText watch-page fallback with TTML response', () => {
+  const VID3 = 'ttmltest1234';
+  it('T6-d-1 枚举+枚举(proxy)全空 → watch page HTML → 解析轨道 → TTML 响应 → 返回 proxy 成功', async () => {
+    // 构造 watch HTML：包含 en 官方字幕轨道（signed，无 fmt 注入）
+    const signedBase =
+      'https://www.youtube.com/api/timedtext?v=' + VID3 +
+      '&ei=XYZ123&sparams=v,ei,expire&expire=99&signature=ABC.DEF';
+    const player = {
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          captionTracks: [
+            { baseUrl: signedBase, languageCode: 'en', name: { simpleText: 'English' }, vssId: '.en' },
+          ],
+        },
+      },
+    };
+    const watchHtml = buildWatchHtml(player);
+
+    // 标准 TTML 响应
+    const ttmlResp = `<?xml version="1.0"?>
+<tt><body><div>
+  <p begin="0">Hello everyone</p>
+  <p begin="1s">This is an TTML response</p>
+  <p begin="2s">From the YouTube signed baseUrl</p>
+</div></body></tt>`;
+
+    const responses: Array<{ ok: boolean; status: number; body: string }> = [
+      ...Array.from({ length: 11 }, () => ({ ok: true, status: 200, body: '{}' })), // direct 枚举=empty
+      ...Array.from({ length: 11 }, () => ({ ok: true, status: 200, body: '{}' })), // proxy 枚举=empty
+      { ok: true, status: 200, body: watchHtml }, // proxy watch page
+      { ok: true, status: 200, body: ttmlResp }, // signed baseUrl → TTML 响应
+    ];
+    const calls: string[] = [];
+    const fetcher = vi.fn(async (url: any, init?: any) => {
+      calls.push(String(url));
+      const r = responses.shift()!;
+      return { ok: r.ok, status: r.status, text: async () => r.body } as unknown as Response;
+    }) as Fetcher;
+
+    const sub = await fetchTimedText(VID3, {
+      fetcher,
+      proxyUrl: 'https://relay.example.com/?url=',
+    });
+    expect(sub.videoId).toBe(VID3);
+    expect(sub.source).toBe('proxy');
+    // TTML 内容必须被正确解析
+    expect(sub.text).toContain('Hello everyone');
+    expect(sub.text).toContain('This is an TTML response');
+    expect(sub.text).toContain('From the YouTube signed baseUrl');
+
+    // 最后一次请求必须保持签名原样：逗号不编码，不注入 fmt
+    const lastCall = calls[calls.length - 1];
+    expect(lastCall).toContain(encodeURIComponent('sparams=v,ei,expire'));
+    expect(lastCall).toContain(encodeURIComponent('signature=ABC.DEF'));
+    expect(lastCall).not.toContain(encodeURIComponent('fmt=json3'));
   });
 });
