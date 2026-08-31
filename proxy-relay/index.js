@@ -29,30 +29,73 @@ import { ProxyAgent, fetch } from 'undici';
 
 const PORT = process.env.PORT || 3000;
 
-// ⚠️  Webshare Rotating Residential 官方配置（从 Endpoint Generator 获取）
-//     curl 示例：curl --proxy "http://jlkwejwd-rotate:mkxz3lp0gblf@p.webshare.io:80" "https://ipv4.webshare.io/"
-//     优先级：代码写死的官方值 > 环境变量，避免 Render Dashboard 保存机制异常造成旧值生效
+/**
+ * ⚠️  Webshare Rotating Residential 官方配置
+ *     Sticky Session 机制：在 username 后追加 `-session-<sessionId>`
+ *       - 相同 sessionId → 分配同一个住宅 IP（最长 60 分钟，webshare 自动保证）
+ *       - 不同 sessionId → 正常 rotate
+ *     应用场景：
+ *       YouTube watch-page 会返回带 signature= 的 signed baseUrl，
+ *       signature 校验会**绑定请求来源 IP 上下文**。
+ *       若 watch-page 抓取走 IP-A、timedtext 请求走 IP-B（rotate 导致），
+ *       YouTube 会静默返回 events=[]（200 OK 但 body 空），字幕内容提取失败。
+ *     因此：从 targetUrl 的查询字符串中解析 `v=` 作为 sessionId，
+ *       让「同一个视频」的所有相关请求始终落在同一个住宅 IP。
+ */
 const FORCE_OFFICIAL_CONFIG = true;
 const OFFICIAL = {
-  username: 'jlkwejwd-rotate',
+  username: 'jlkwejwd-rotate',  // 不含 sticky 后缀
   password: 'mkxz3lp0gblf',
   host: 'p.webshare.io',
   port: '80',
 };
 
-const PROXY_USERNAME = FORCE_OFFICIAL_CONFIG ? OFFICIAL.username : (process.env.PROXY_USERNAME || OFFICIAL.username);
+const PROXY_USERNAME_BASE = FORCE_OFFICIAL_CONFIG ? OFFICIAL.username : (process.env.PROXY_USERNAME || OFFICIAL.username);
 const PROXY_PASSWORD = FORCE_OFFICIAL_CONFIG ? OFFICIAL.password : (process.env.PROXY_PASSWORD || OFFICIAL.password);
 const PROXY_HOST = FORCE_OFFICIAL_CONFIG ? OFFICIAL.host : (process.env.PROXY_HOST || OFFICIAL.host);
 const PROXY_PORT = FORCE_OFFICIAL_CONFIG ? OFFICIAL.port : (process.env.PROXY_PORT || OFFICIAL.port);
 
-if (!PROXY_USERNAME || !PROXY_PASSWORD) {
+if (!PROXY_USERNAME_BASE || !PROXY_PASSWORD) {
   console.error('PROXY_USERNAME and PROXY_PASSWORD are required');
   console.error('Get them from https://www.webshare.io/ Dashboard');
   process.exit(1);
 }
 
-const proxyUrl = `http://${PROXY_USERNAME}:${PROXY_PASSWORD}@${PROXY_HOST}:${PROXY_PORT}`;
-const agent = new ProxyAgent(proxyUrl);
+/** 从 target URL 解析 sticky session id：
+ *  1) 优先取查询字符串里的 v=（YouTube video ID）
+ *  2) 没有则取 path 最后一段（/watch、/api/timedtext 这些 path）
+ *  3) 都没有 → 用 'default'
+ */
+function resolveSessionId(targetUrl) {
+  try {
+    const u = new URL(targetUrl);
+    const v = u.searchParams.get('v');
+    if (v && v.length <= 64) return v;
+    const pathParts = u.pathname.split('/').filter(Boolean);
+    if (pathParts.length) return pathParts[pathParts.length - 1].slice(0, 32);
+    return 'default';
+  } catch (_e) {
+    return 'default';
+  }
+}
+
+/** 按 session 创建 ProxyAgent（做个 LRU 缓存，避免每个请求都 new 一次） */
+const AGENT_CACHE_MAX = 128;
+const agentCache = new Map();
+function getAgentForSession(sessionId) {
+  const cached = agentCache.get(sessionId);
+  if (cached) return cached;
+  const username = `${PROXY_USERNAME_BASE}-session-${sessionId}`;
+  const proxyUrl = `http://${encodeURIComponent(username)}:${encodeURIComponent(PROXY_PASSWORD)}@${PROXY_HOST}:${PROXY_PORT}`;
+  const agent = new ProxyAgent(proxyUrl);
+  agentCache.set(sessionId, agent);
+  if (agentCache.size > AGENT_CACHE_MAX) {
+    // 淘汰最老的一个
+    const firstKey = agentCache.keys().next().value;
+    agentCache.delete(firstKey);
+  }
+  return agent;
+}
 
 const server = http.createServer(async (req, res) => {
   // CORS
@@ -84,6 +127,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    const sessionId = resolveSessionId(targetUrl);
+    const agent = getAgentForSession(sessionId);
+
     const response = await fetch(targetUrl, {
       dispatcher: agent,
       headers: {
